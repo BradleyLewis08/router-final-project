@@ -41,10 +41,26 @@ header arp_t {
     ip4Addr_t dstIP;
 }
 
+header ipv4_t {
+    bit<4>    version;
+    bit<4>    ihl;
+    bit<8>    diffserv;
+    bit<16>   totalLen;
+    bit<16>   identification;
+    bit<3>    flags;
+    bit<13>   fragOffset;
+    bit<8>    ttl;
+    bit<8>    protocol;
+    bit<16>   hdrChecksum;
+    ip4Addr_t srcAddr;
+    ip4Addr_t dstAddr;
+}
+
 struct headers {
     ethernet_t        ethernet;
     cpu_metadata_t    cpu_metadata;
     arp_t             arp;
+    ipv4_t            ipv4;
 }
 
 struct metadata { }
@@ -88,6 +104,18 @@ control MyIngress(inout headers hdr,
                   inout metadata meta,
                   inout standard_metadata_t standard_metadata) {
 
+    
+    ip4Addr_t next_hop_ip = 0;
+    macAddr_t next_hop_mac = 0;
+    bit<1> local_miss = 0;
+
+    counter(5, CounterType.packets) set_mgid_counter;
+
+
+    action set_local_miss() {
+        local_miss = 1;
+    }
+
     action drop() {
         mark_to_drop(standard_metadata);
     }
@@ -117,6 +145,21 @@ control MyIngress(inout headers hdr,
         standard_metadata.egress_spec = CPU_PORT;
     }
 
+    action ethernet_forward() {
+        hdr.ethernet.srcAddr = hdr.ethernet.dstAddr;
+        hdr.ethernet.dstAddr = next_hop_mac;
+    }
+
+    action ip_hit(port_t port, ip4Addr_t next_hop) {
+        set_egr(port);
+        next_hop_ip = next_hop;
+    }
+
+    action arp_hit(macAddr_t mac) {
+        hdr.ethernet.srcAddr = hdr.ethernet.dstAddr;
+        hdr.ethernet.dstAddr = mac;
+    }
+
     table fwd_l2 {
         key = {
             hdr.ethernet.dstAddr: exact;
@@ -131,15 +174,68 @@ control MyIngress(inout headers hdr,
         default_action = drop();
     }
 
+    // For dynamic routing
+    table routing_table {
+        key = {
+            hdr.ipv4.dstAddr: lpm;
+        }
+        actions = {
+            ip_hit;
+            set_egr;
+            send_to_cpu;
+            drop;
+        }
+    }
+
+    table arp_table {
+        key={
+            next_hop_ip: exact;
+        }
+        actions={
+            arp_hit;
+            send_to_cpu;
+            drop;
+        }
+    }
+
+    // For local forwarding
+    table local_forwarding_table {
+        key = {
+            hdr.ipv4.dstAddr: exact;
+        }
+        actions = {
+            ip_hit;
+            set_local_miss;
+            send_to_cpu;
+            drop;
+        }
+    }
 
     apply {
         if (standard_metadata.ingress_port == CPU_PORT)
             cpu_meta_decap();
 
+        // Respond to ARP requests
         if (hdr.arp.isValid() && standard_metadata.ingress_port != CPU_PORT) {
             send_to_cpu();
-        }
-        else if (hdr.ethernet.isValid()) {
+        } else if (hdr.ipv4.isValid()) {
+            // Handle TTL expiration
+            if (hdr.ipv4.ttl == 0) {
+                drop(); 
+            } else {
+                hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
+            }
+
+            // Set the next_hop_ip address by looking either locally or in the routing table
+            local_forwarding_table.apply();
+            if (local_miss == 1) {
+                routing_table.apply();
+            }
+
+            // Get the next_hop_mac address by looking in the ARP table
+            arp_table.apply();
+            ethernet_forward();
+        } else if (hdr.ethernet.isValid()) {
             fwd_l2.apply();
         }
     }
