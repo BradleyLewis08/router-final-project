@@ -1,4 +1,4 @@
-from scapy.fields import BitField, ByteField, ShortField, LongField
+from scapy.fields import IntField, ByteField, ShortField, LongField, IPField, PacketListField
 from scapy.packet import Packet, bind_layers
 from scapy.layers.inet import IP
 
@@ -75,8 +75,8 @@ class PWOSPFPacket(Packet):
 		ByteField("version", 2),
 		ByteField("type", 0),
 		ShortField("packet_length", None),
-		ByteField("router_id", None),
-		ByteField("area_id", None),
+		IPField("router_id", None),
+		IntField("area_id", None),
 		ShortField("checksum", None),
 		ShortField("autype", None),
 		LongField("authentication", None),
@@ -120,9 +120,42 @@ Network mask
 class HelloPacket(Packet):
 	name="HelloPacket"
 	fields_desc = [
-		LongField("network_mask", None),
+		IPField("network_mask", None),
 		ShortField("hello_int", None),
 		ShortField("padding", None)
+	]
+
+'''
+LSUAdvertisement Structure
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           Subnet                              |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           Mask                                |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         Router ID                             |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+Fields
+------
+
+   Subnet
+      Subnet number of the advertised route.  Note that default routes
+      will have a subnet value of 0.0.0.0.
+
+   Mask
+      Subnet mask of the advertised route
+
+   Router ID
+      ID of the neighboring router on the advertised link.  If there is no
+      connected router to the link the RID should be set to 0.
+
+'''
+class LSUAdvertisement(Packet):
+	name="LSUAdvertisement",
+	fields_desc = [
+		IPField("subnet", "0.0.0.0"),
+		IPField('mask', None),
+		IPField('routerID', None)
 	]
 
 '''
@@ -175,43 +208,12 @@ Sequence
 class LSUPacket(Packet):
 	name="LSUPacket"
 	fields_desc = [
-		LongField("sequence", None),
-		ShortField("ttl", None),
-		ShortField("num_advertisements", None)
+		IPField("sequence", None),
+		IPField("ttl", None),
+		IPField("num_advertisements", None),
+		PacketListField("link_state_ads", None, LSUAdvertisement, length_from=lambda pkt:pkt.num_advertisements)
 	]
 
-'''
-LSUAdvertisement Structure
- +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                           Subnet                              |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                           Mask                                |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                         Router ID                             |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-
-Fields
-------
-
-   Subnet
-      Subnet number of the advertised route.  Note that default routes
-      will have a subnet value of 0.0.0.0.
-
-   Mask
-      Subnet mask of the advertised route
-
-   Router ID
-      ID of the neighboring router on the advertised link.  If there is no
-      connected router to the link the RID should be set to 0.
-
-'''
-class LSUAdvertisement(Packet):
-	name="LSUAdvertisement",
-	fields_desc = [
-		LongField("subnet", "0.0.0.0"),
-		LongField('mask', None),
-		LongField('routerID', None)
-	]
 
 # PWOSPF are expected to be encapsulated IPv4 packets with IP protocol number 89 
 bind_layers(IP, PWOSPFPacket, proto=89)

@@ -11,6 +11,14 @@ ARP_OP_REPLY = 0x0002
 
 BCAST_ETHER_ADDR = "ff:ff:ff:ff:ff:ff"
 BCAST_HELLO_IP_ADDR = "224.0.0.5"
+OSPF_HELLO_TYPE = 1
+OSPF_LSU_TYPE = 4
+
+OSPF_PROTOCOL_NUMBER = 89
+
+CPU_ORIG_ETHER_TYPE = 0x0800
+
+
 
 
 '''
@@ -29,11 +37,12 @@ neighbors : list
     A list of neighbors connected to the interface
 '''
 class Interface():
-    def __init__(self, ip, mask, helloint, neighbors=[]):
+    def __init__(self, ip, mask, helloint, port, neighbors=[]):
         self.ip = ip
         self.mask = mask
         self.helloint = helloint
         self.neighbors = neighbors
+        self.port = port
 
 '''
 Thread responsible for sending hello packets to neighbors for a given interface
@@ -50,29 +59,57 @@ class HelloPacketSender(Thread):
         super(HelloPacketSender, self).__init__()
         self.interface = interface
         self.controller = controller
+        self.DEBUG = True
+
+    def debug(self, *args):
+        if(self.DEBUG):
+            print(f"{self.interface.ip} - DEBUG: ", *args)
+    
+    def ether_encap(self, pkt):
+        pkt[Ether].src = self.controller.mac_addr
+        pkt[Ether].dst = BCAST_ETHER_ADDR
+    
+    def cpu_encap(self, pkt):
+        pkt[CPUMetadata].fromCpu = 1
+        pkt[CPUMetadata].origEtherType = CPU_ORIG_ETHER_TYPE
+        pkt[CPUMetadata].srcPort = 1
+        pkt[CPUMetadata].dstPort = self.interface.port
+        pkt[CPUMetadata].isHelloPacket = 1
+
+    def ip_encap(self, pkt):
+        pkt[IP].src = self.interface.ip
+        pkt[IP].dst = BCAST_HELLO_IP_ADDR
+        pkt[IP].proto = OSPF_PROTOCOL_NUMBER
+
+    def PWOSPF_encap(self, pkt):
+        pkt[PWOSPFPacket].version = 2
+        pkt[PWOSPFPacket].type = OSPF_HELLO_TYPE
+        pkt[PWOSPFPacket].packet_length = 0
+        pkt[PWOSPFPacket].router_id = self.controller.router_id
+        pkt[PWOSPFPacket].area_id = self.controller.area_id
+        pkt[PWOSPFPacket].checksum = 0
+
+    def hello_encap(self, pkt):
+        pkt[HelloPacket].network_mask = self.interface.mask
+        pkt[HelloPacket].hello_int = self.interface.helloint
 
     def _create_hello_packet(self):
-        packet = Ether() / IP() / PWOSPFPacket() / HelloPacket()
-        packet[Ether].src = self.controller.mac_addr
-        packet[Ether].dest = BCAST_ETHER_ADDR
-        packet[IP].src = self.interface.ip
-        packet[IP].dest = BCAST_HELLO_IP_ADDR
-        packet[HelloPacket].routerId = self.interface.routerId
-        packet[HelloPacket].areaId = self.interface.areaId
-        packet[HelloPacket].authType = 0
-        packet[HelloPacket].helloint = self.interface.helloint
+        packet = Ether() / CPUMetadata() / IP() / PWOSPFPacket() / HelloPacket()
+        self.ether_encap(packet)
+        self.cpu_encap(packet)
+        self.ip_encap(packet)
+        self.PWOSPF_encap(packet)
+        self.hello_encap(packet)
         return packet
 
     def run(self):
         pass
-        # self.debug("Running!")
-        # Send hello packets every hello interval
-        # while True:
-        #     packet = self._create_hello_packet()
-        #     self.debug("Sending hello packet:")
-        #     packet.show()
-        #     self.controller.send(packet)
-        #     time.sleep(self.interface.helloint)
+        # if self.interface.port == 1:
+        #     return
+        # packet = self._create_hello_packet()
+        # # packet.show()
+        # self.controller.send(packet)
+        # time.sleep(self.interface.helloint)
 
 class Controller(Thread):
     '''
@@ -92,9 +129,9 @@ class Controller(Thread):
         A dictionary of IP addresses to MAC addresses
     stop_event : Event
         An event to signal the controller to stop listening
-    routerId : str
+    router_id : str
         The router ID of the router (defaults to the IP address of the 0th interface)
-    areaId : str
+    area_id : str
         The area ID of the router
     lsuint : int
         Interval between link state advertisements
@@ -102,14 +139,14 @@ class Controller(Thread):
         A list of interfaces on the router
     
     '''
-    def __init__(self, sw, router, areaId, interfaces, lsuint=2, start_wait=0.3):
+    def __init__(self, sw, router, area_id, interfaces, lsuint=2, start_wait=0.3):
         # Assertions
         assert len(sw.intfs) > 1, "Switch must have at least one interface"
         assert start_wait >= 0, "Start wait must be non-negative"
 
         super(Controller, self).__init__()
         self.sw = sw
-        self.areaId = areaId
+        self.area_id = area_id
         self.mac_addr = router.MAC()
         self.start_wait = start_wait # time to wait for the controller to be listenning
 
@@ -118,24 +155,30 @@ class Controller(Thread):
         self.mac_for_ip = {}
 
         self.stop_event = Event()
-        self.routerId = router.IP()
+        self.router_id = router.IP()
         self.lsuint = lsuint
 
         # ----------- INTERFACES ------------
         self.interfaces = []
 
-        self.DEBUG = False
-
+        self.DEBUG = True
 
         for interface in interfaces:
-            self.interfaces.append(Interface(interface["ip"], interface["mask"], interface["helloint"]))
+            self.interfaces.append(Interface(interface["ip"], interface["mask"], interface["helloint"], interface["port"]))
         
         self.adjacency_list = {}
-    
+
+        # ----------- HELLO packets ------------
+        self.hello_packet_senders = [HelloPacketSender(self.interfaces[i], self) for i in range(len(self.interfaces))]
+
+        # # Start the hello packet senders
+        # for sender in self.hello_packet_senders:
+        #     sender.start()
+
     # Debug statement that can take a string and argument
     def debug(self, *args):
-        if(self.debug):
-            print(f"{self.routerId} - DEBUG: ", *args)
+        if(self.DEBUG):
+            print(f"{self.router_id} - DEBUG: ", *args)
 
     def findInterface(self, ip):
         for interface in self.interfaces:
@@ -157,6 +200,7 @@ class Controller(Thread):
     def addIpAddr(self, ip, mac):
         # Don't re-add the ip-mac mapping if we already have it:
         if ip in self.mac_for_ip: return
+        self.debug("Adding IP-MAC mapping: ", ip, mac)
         self.sw.insertTableEntry(table_name='MyIngress.arp_table',
                 match_fields={'next_hop_ip': ip},
                 action_name='MyIngress.arp_hit',
@@ -164,6 +208,7 @@ class Controller(Thread):
         self.mac_for_ip[ip] = mac
 
     def handleArpReply(self, pkt):
+        self.debug(self.router_id, "Handling ARP reply for ", pkt[ARP].pdst)
         self.addMacAddr(pkt[ARP].hwsrc, pkt[CPUMetadata].srcPort)
         self.addIpAddr(pkt[ARP].psrc, pkt[ARP].hwsrc)
         self.send(pkt)
@@ -186,7 +231,9 @@ class Controller(Thread):
         return pkt
 
     def handleArpRequest(self, pkt):
-        self.debug(self.routerId, "Handling ARP request for ", pkt[ARP].pdst)
+        self.debug("Handling ARP request")
+        pkt.show()
+        # self.debug(self.router_id, "Handling ARP request for ", pkt[ARP].pdst)
         self.addMacAddr(pkt[ARP].hwsrc, pkt[CPUMetadata].srcPort)
         self.addIpAddr(pkt[ARP].psrc, pkt[ARP].hwsrc) 
 
@@ -194,9 +241,7 @@ class Controller(Thread):
         matched_interface = self.findInterface(pkt[ARP].pdst)
 
         if matched_interface is not None:
-            self.debug("Matched interface: ", matched_interface.ip)
             pkt = self._constructArpReply(pkt, matched_interface)
-            self.debug("Packet: ", pkt[ARP].op, pkt[ARP].hwdst, pkt[ARP].pdst, pkt[ARP].hwsrc, pkt[ARP].psrc)
         self.send(pkt)
     
     '''
@@ -222,11 +267,11 @@ class Controller(Thread):
         # TODO: Check 2
 
         # Check 3
-        if pkt[HelloPacket].areaId != self.areaId:
+        if pkt[HelloPacket].area_id != self.area_id:
             return False
         
         # Check 4
-        if pkt[HelloPacket].authType != 0:
+        if pkt[HelloPacket].autype != 0:
             return False    
 
         return True
@@ -241,19 +286,24 @@ class Controller(Thread):
             return
         
         # Ignore packets that the CPU sends:
-        if pkt[CPUMetadata].fromCpu == 1: return
+        if pkt[CPUMetadata].fromCpu == 1: 
+            # print("Ignoring packet from CPU")
+            # pkt.show()
+            return
 
         if ARP in pkt:
             if pkt[ARP].op == ARP_OP_REQ:
                 self.handleArpRequest(pkt)
             elif pkt[ARP].op == ARP_OP_REPLY:
                 self.handleArpReply(pkt)
-        
+
         if PWOSPFPacket in pkt:
+            self.debug("Received PWOSPF packet")
             if not self._helloPacketIsValid(pkt):
                 return
 
             if HelloPacket in pkt:
+                self.debug("Received Hello packet")
                 self.handleHelloPacket(pkt)
 
     def send(self, *args, **override_kwargs):
