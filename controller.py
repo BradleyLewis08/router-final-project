@@ -19,8 +19,6 @@ OSPF_PROTOCOL_NUMBER = 89
 CPU_ORIG_ETHER_TYPE = 0x0800
 
 
-
-
 '''
 Represents a single interface on a router
 ...
@@ -172,8 +170,8 @@ class Controller(Thread):
         self.hello_packet_senders = [HelloPacketSender(self.interfaces[i], self) for i in range(len(self.interfaces))]
 
         # # Start the hello packet senders
-        # for sender in self.hello_packet_senders:
-        #     sender.start()
+        for sender in self.hello_packet_senders:
+            sender.start()
 
     # Debug statement that can take a string and argument
     def debug(self, *args):
@@ -202,7 +200,7 @@ class Controller(Thread):
         if ip in self.mac_for_ip: return
         self.debug("Adding IP-MAC mapping: ", ip, mac)
         self.sw.insertTableEntry(table_name='MyIngress.arp_table',
-                match_fields={'next_hop_ip': ip},
+                match_fields={'next_hop_ip_address': ip},
                 action_name='MyIngress.arp_hit',
                 action_params={'mac': mac})
         self.mac_for_ip[ip] = mac
@@ -231,7 +229,7 @@ class Controller(Thread):
         return pkt
 
     def handleArpRequest(self, pkt):
-        self.debug("Handling ARP request")
+        self.debug("Handling ARP request for ", pkt[ARP].pdst)
         pkt.show()
         # self.debug(self.router_id, "Handling ARP request for ", pkt[ARP].pdst)
         self.addMacAddr(pkt[ARP].hwsrc, pkt[CPUMetadata].srcPort)
@@ -244,6 +242,9 @@ class Controller(Thread):
             pkt = self._constructArpReply(pkt, matched_interface)
         self.send(pkt)
     
+    def __str__(self):
+        print(f"Router ID: {self.router_id} Area ID: {self.area_id} LSUInt: {self.lsuint} Interfaces: {self.interfaces} Adjacency List: {self.adjacency_list}")
+
     '''
     Hello Packet Validation
     -----------

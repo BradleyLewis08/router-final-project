@@ -12,9 +12,9 @@ const port_t CPU_PORT           = 0x1;
 const bit<16> ARP_OP_REQ        = 0x0001;
 const bit<16> ARP_OP_REPLY      = 0x0002;
 
+const bit<16> TYPE_IPV4         = 0x0800;
 const bit<16> TYPE_ARP          = 0x0806;
 const bit<16> TYPE_CPU_METADATA = 0x080a;
-
 
 header ethernet_t {
     macAddr_t dstAddr;
@@ -34,7 +34,6 @@ header arp_t {
     bit<8> hwAddrLen;
     bit<8> protoAddrLen;
     bit<16> opcode;
-    // assumes hardware type is ethernet and protocol is IP
     macAddr_t srcEth;
     ip4Addr_t srcIP;
     macAddr_t dstEth;
@@ -69,6 +68,7 @@ parser MyParser(packet_in packet,
                 out headers hdr,
                 inout metadata meta,
                 inout standard_metadata_t standard_metadata) {
+
     state start {
         transition parse_ethernet;
     }
@@ -78,6 +78,7 @@ parser MyParser(packet_in packet,
         transition select(hdr.ethernet.etherType) {
             TYPE_ARP: parse_arp;
             TYPE_CPU_METADATA: parse_cpu_metadata;
+            TYPE_IPV4: parse_ipv4;
             default: accept;
         }
     }
@@ -86,12 +87,18 @@ parser MyParser(packet_in packet,
         packet.extract(hdr.cpu_metadata);
         transition select(hdr.cpu_metadata.origEtherType) {
             TYPE_ARP: parse_arp;
+            TYPE_IPV4: parse_ipv4;
             default: accept;
         }
     }
 
     state parse_arp {
         packet.extract(hdr.arp);
+        transition accept;
+    }
+
+    state parse_ipv4 {
+        packet.extract(hdr.ipv4);
         transition accept;
     }
 }
@@ -104,17 +111,8 @@ control MyIngress(inout headers hdr,
                   inout metadata meta,
                   inout standard_metadata_t standard_metadata) {
 
-    
-    ip4Addr_t next_hop_ip = 0;
-    macAddr_t next_hop_mac = 0;
-    bit<1> local_miss = 0;
-
-    counter(5, CounterType.packets) set_mgid_counter;
-
-
-    action set_local_miss() {
-        local_miss = 1;
-    }
+    ip4Addr_t next_hop_ip_address = 0;
+    macAddr_t next_hop_mac_address = 0;
 
     action drop() {
         mark_to_drop(standard_metadata);
@@ -127,6 +125,8 @@ control MyIngress(inout headers hdr,
     action set_mgid(mcastGrp_t mgid) {
         standard_metadata.mcast_grp = mgid;
     }
+
+    // ------------------------ CPU Processing ------------------------
 
     action cpu_meta_encap() {
         hdr.cpu_metadata.setValid();
@@ -145,19 +145,17 @@ control MyIngress(inout headers hdr,
         standard_metadata.egress_spec = CPU_PORT;
     }
 
-    action ethernet_forward() {
+    // ------------------------ ARP Processing ------------------------
+
+    action arp_hit(macAddr_t mac) {
+        // Update the destination MAC address
         hdr.ethernet.srcAddr = hdr.ethernet.dstAddr;
-        hdr.ethernet.dstAddr = next_hop_mac;
+        hdr.ethernet.dstAddr = mac;
     }
 
     action ip_hit(port_t port, ip4Addr_t next_hop) {
         set_egr(port);
-        next_hop_ip = next_hop;
-    }
-
-    action arp_hit(macAddr_t mac) {
-        hdr.ethernet.srcAddr = hdr.ethernet.dstAddr;
-        hdr.ethernet.dstAddr = mac;
+        next_hop_ip_address = next_hop;
     }
 
     table fwd_l2 {
@@ -174,27 +172,25 @@ control MyIngress(inout headers hdr,
         default_action = drop();
     }
 
-    // For dynamic routing
+    table arp_table {
+        key={
+            next_hop_ip_address: exact;
+        }
+        actions={
+            arp_hit;
+            NoAction;
+        }
+        size=64;
+        default_action = NoAction;
+    }
+
     table routing_table {
         key = {
             hdr.ipv4.dstAddr: lpm;
         }
         actions = {
             ip_hit;
-            set_egr;
-            send_to_cpu;
-            drop;
-        }
-    }
-
-    table arp_table {
-        key={
-            next_hop_ip: exact;
-        }
-        actions={
-            arp_hit;
-            send_to_cpu;
-            drop;
+            send_to_cpu; // If no match in the routing table, send to CPU
         }
     }
 
@@ -205,17 +201,13 @@ control MyIngress(inout headers hdr,
         }
         actions = {
             ip_hit;
-            set_local_miss;
             send_to_cpu;
-            drop;
         }
     }
 
     apply {
         if (standard_metadata.ingress_port == CPU_PORT)
             cpu_meta_decap();
-
-        // Respond to ARP requests
         if (hdr.arp.isValid() && standard_metadata.ingress_port != CPU_PORT) {
             send_to_cpu();
         } else if (hdr.ipv4.isValid()) {
@@ -226,17 +218,22 @@ control MyIngress(inout headers hdr,
                 hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
             }
 
-            // Set the next_hop_ip address by looking either locally or in the routing table
-            local_forwarding_table.apply();
-            if (local_miss == 1) {
+            // Set the next_hop_ip address by looking either locally or in the routing table.
+            // Sets the next_hop_ip_address and the egress port
+            if(!local_forwarding_table.apply().hit) {
                 routing_table.apply();
             }
 
-            // Get the next_hop_mac address by looking in the ARP table
-            arp_table.apply();
-            ethernet_forward();
+            // Based on next_hop_ip_address, if we are not sending to CPU, we need to do ARP lookup
+            if (standard_metadata.egress_spec != CPU_PORT) {
+                if (!arp_table.apply().hit) {
+                    send_to_cpu();
+                }
+            }
         } else if (hdr.ethernet.isValid()) {
             fwd_l2.apply();
+        } else {
+            drop();
         }
     }
 }

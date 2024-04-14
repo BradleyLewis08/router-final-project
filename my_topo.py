@@ -45,19 +45,33 @@ def get_router_to_host_mapping(router_names, host_names, host_ips, host_macs):
     return router_to_hosts
 
 class SingleSwitchTopo(Topo):
-    def __init__(self, n, **opts):
-        Topo.__init__(self, **opts)
+    def __init__(self, **opts):
+        super(SingleSwitchTopo, self).__init__(**opts)
 
-        switch = self.addSwitch("s1")
+        self.router_names = ["r1"]
+        self.switch_names = ["s1"]
+        self.host_names = ["h1", "h2"]
 
-        for i in range(2, n + 1):
-            host = self.addHost(
-                "h%d" % i, ip="10.0.0.%d" % i, mac="00:00:00:00:00:%02x" % i
-            )
-            self.addLink(host, switch, port2=i)
-        
-        router = self.addHost("r1", ip="100.0.1.1")
-        self.addLink(router, switch, port2=1)
+        self.router_ips = [f"200.0.{1}.0"]
+        self.host_ips = [f"200.0.{1}.10", f"200.0.{1}.20"]
+        self.host_macs = [f"00:00:00:00:00:{1}0", f"00:00:00:00:00:{1}1"]
+
+        self.router_macs = [f"00:00:00:00:00:0{1}"]
+
+        router = self.addHost(self.router_names[0], ip=self.router_ips[0], mac=self.router_macs[0])
+        switch = self.addSwitch(self.switch_names[0])
+        host1 = self.addHost(self.host_names[0], ip=self.host_ips[0], mac=self.host_macs[0])
+        host2 = self.addHost(self.host_names[1], ip=self.host_ips[1], mac=self.host_macs[1])
+
+        self.addLink(router, switch, port2=CPU_EGRESS_PORT)
+        self.addLink(host1, switch, port2=HOST_SWITCH_INGRESS_PORT)
+        self.addLink(host2, switch, port2=HOST_SWITCH_INGRESS_PORT + 1)
+
+    def get_router_interfaces(self):
+        return get_router_interfaces(self.router_names)
+    
+    def get_router_to_host_mapping(self):
+        return get_router_to_host_mapping(self.router_names, self.host_names, self.host_ips, self.host_macs)
 
 
 class DualSwitchTopo(Topo):

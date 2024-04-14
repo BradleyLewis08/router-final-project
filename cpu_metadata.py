@@ -10,10 +10,9 @@ class CPUMetadata(Packet):
     fields_desc = [ ByteField("fromCpu", 0),
                     ShortField("origEtherType", None),
                     ShortField("srcPort", None),
-                    ShortField("dstPort", None),
-                    ByteField("isHelloPacket", 0),
                     ]
 
 bind_layers(Ether, CPUMetadata, type=TYPE_CPU_METADATA)
 bind_layers(CPUMetadata, IP, origEtherType=0x0800)
 bind_layers(CPUMetadata, ARP, origEtherType=0x0806)
+
