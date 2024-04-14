@@ -10,6 +10,7 @@ class CPUMetadata(Packet):
     fields_desc = [ ByteField("fromCpu", 0),
                     ShortField("origEtherType", None),
                     ShortField("srcPort", None),
+                    ShortField("dstPort", None),
                     ]
 
 bind_layers(Ether, CPUMetadata, type=TYPE_CPU_METADATA)

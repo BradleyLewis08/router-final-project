@@ -82,10 +82,10 @@ class DualSwitchTopo(Topo):
         self.switch_names = ["s1", "s2"]
         self.host_names = ["h1", "h2"]
 
-        self.router_ips = [f"200.0.{i}.0" for i in range(1, 3)]
-        self.host_ips = [f"200.0.{i}.10" for i in range(1, 3)]
-        self.host_macs = [f"00:00:00:00:00:{i}0" for i in range(1, 3)]
-        self.router_macs = [f"00:00:00:00:00:0{i}" for i in range(1, 3)]
+        self.router_ips = [f"200.0.{i}.0" for i in range(1, 4)]
+        self.host_ips = [f"200.0.{i}.10" for i in range(1, 4)]
+        self.host_macs = [f"00:00:00:00:00:{i}0" for i in range(1, 4)]
+        self.router_macs = [f"00:00:00:00:00:0{i}" for i in range(1, 4)]
 
         for idx, router_name in enumerate(self.router_names):
             router = self.addHost(router_name, ip=self.router_ips[idx], mac=self.router_macs[idx])

@@ -7,7 +7,7 @@ from tests import test_ping_all_router_interfaces
 from p4app import P4Mininet
 
 from controller import Controller
-from my_topo import DualSwitchTopo
+from my_topo import QuadSwitchTopo, DualSwitchTopo
 
 # ----------------- INITIALIZATION FUNCTIONS -----------------
 
@@ -49,10 +49,15 @@ def init_host_local_routes(switches, routers, routers_to_hosts):
                 )
 
 def start_controllers(switches, routers, interfaces):
+    controllers = []
     for switch_idx, switch in enumerate(switches):
         router = routers[switch_idx]
         controller = Controller(switch, router, 1, interfaces[router.name])
         controller.start()
+        controllers.append(controller)
+    
+    return controllers
+
 
 # ----------------- UTILS -----------------
 def print_all_table_entries(switches):
@@ -60,30 +65,36 @@ def print_all_table_entries(switches):
         switch.printTableEntries()
 # ----------------- MAIN ----------------
 
-topo = DualSwitchTopo()
+# topo = QuadSwitchTopo()
+topo = QuadSwitchTopo()
 
 net = P4Mininet(program="router.p4", topo=topo, auto_arp=False)
 net.start()
 
-# Add a mcast group for all ports (except for the CPU port)
 sw1 = net.get("s1")
 sw2 = net.get("s2")
-# sw3 = net.get("s3")
-# sw4 = net.get("s4")
+sw3 = net.get("s3")
+sw4 = net.get("s4")
 
 r1 = net.get("r1")
 r2 = net.get("r2")
-# r3 = net.get("r3")
-# r4 = net.get("r4")
+r3 = net.get("r3")
+r4 = net.get("r4")
 
 h1 = net.get("h1")
 h2 = net.get("h2")
-# h3 = net.get("h3")
-# h4 = net.get("h4")
+h3 = net.get("h3")
+h4 = net.get("h4")
 
-switches = [sw1, sw2]
-routers = [r1, r2]
-hosts = [h1, h2]
+#------------ QUAD SWITCH ----------- 
+switches = [sw1, sw2, sw3, sw4]
+routers = [r1, r2, r3, r4]
+hosts = [h1, h2, h3, h4]
+
+# # ----------- DUAL SWITCH -----------
+# switches = [sw1, sw2]
+# routers = [r1, r2]
+# hosts = [h1, h2]
 
 interfaces = topo.get_router_interfaces()
 routers_to_hosts = topo.get_router_to_host_mapping()
@@ -91,27 +102,25 @@ routers_to_hosts = topo.get_router_to_host_mapping()
 init_multicast(switches)
 init_control_plane_interfaces(switches, interfaces, routers)
 init_host_local_routes(switches, routers, routers_to_hosts)
-start_controllers(switches, routers, interfaces)
+controllers = start_controllers(switches, routers, interfaces)
+print("Started")
 
-# Add static routing
+time.sleep(10)
 
-sw1.insertTableEntry(
-    table_name="MyIngress.local_forwarding_table",
-    match_fields={"hdr.ipv4.dstAddr": "200.0.2.1"},
-    action_name="MyIngress.ip_hit",
-    action_params={"port": 2, "next_hop": "200.0.2.1"}
-)
+for controller in controllers:
+    for interface in controller.interfaces:
+        print(interface)
 
-h1 = net.get("h1")
+sys.exit(0)
 
 # print_all_table_entries(switches)
 
 # print("Pingall: ", h2.cmd("pingall"))
 
-print(h1.cmd("ping -c1 200.0.2.1"))
+# print(h1.cmd("arping -c1 200.0.2.1"))
 
-sw1.printTableEntries()
-sw2.printTableEntries()
+# sw1.printTableEntries()
+# sw2.printTableEntries()
 # test_ping_all_router_interfaces(hosts, routers, interfaces)
 # print(h1.cmd("pingall"))
 
@@ -122,8 +131,8 @@ sw2.printTableEntries()
 
 
 # These table entries were added by the CPU:
-sw1.printTableEntries()
-sw2.printTableEntries()
+# sw1.printTableEntries()
+# sw2.printTableEntries()
 
 # while True:
 #     print("Switch 1 hello packets: ", sw1.readCounter('hello_packets', 1)[0])

@@ -5,18 +5,10 @@ from async_sniff import sniff
 from cpu_metadata import CPUMetadata
 from packets import PWOSPFPacket, HelloPacket, LSUPacket, LSUAdvertisement
 import time
+import json
 
-ARP_OP_REQ   = 0x0001
-ARP_OP_REPLY = 0x0002
-
-BCAST_ETHER_ADDR = "ff:ff:ff:ff:ff:ff"
-BCAST_HELLO_IP_ADDR = "224.0.0.5"
-OSPF_HELLO_TYPE = 1
-OSPF_LSU_TYPE = 4
-
-OSPF_PROTOCOL_NUMBER = 89
-
-CPU_ORIG_ETHER_TYPE = 0x0800
+from constants import *
+from interface import Interface, neighborFactory
 
 
 '''
@@ -34,81 +26,6 @@ helloint : int
 neighbors : list
     A list of neighbors connected to the interface
 '''
-class Interface():
-    def __init__(self, ip, mask, helloint, port, neighbors=[]):
-        self.ip = ip
-        self.mask = mask
-        self.helloint = helloint
-        self.neighbors = neighbors
-        self.port = port
-
-'''
-Thread responsible for sending hello packets to neighbors for a given interface
-
-Attributes
-----------
-    interface : Interface
-        The interface to send hello packets on
-    controller: Controller
-        The controller of the router (for getting controller's details and sending packets)
-'''
-class HelloPacketSender(Thread):
-    def __init__(self, interface, controller):
-        super(HelloPacketSender, self).__init__()
-        self.interface = interface
-        self.controller = controller
-        self.DEBUG = True
-
-    def debug(self, *args):
-        if(self.DEBUG):
-            print(f"{self.interface.ip} - DEBUG: ", *args)
-    
-    def ether_encap(self, pkt):
-        pkt[Ether].src = self.controller.mac_addr
-        pkt[Ether].dst = BCAST_ETHER_ADDR
-    
-    def cpu_encap(self, pkt):
-        pkt[CPUMetadata].fromCpu = 1
-        pkt[CPUMetadata].origEtherType = CPU_ORIG_ETHER_TYPE
-        pkt[CPUMetadata].srcPort = 1
-        pkt[CPUMetadata].dstPort = self.interface.port
-        pkt[CPUMetadata].isHelloPacket = 1
-
-    def ip_encap(self, pkt):
-        pkt[IP].src = self.interface.ip
-        pkt[IP].dst = BCAST_HELLO_IP_ADDR
-        pkt[IP].proto = OSPF_PROTOCOL_NUMBER
-
-    def PWOSPF_encap(self, pkt):
-        pkt[PWOSPFPacket].version = 2
-        pkt[PWOSPFPacket].type = OSPF_HELLO_TYPE
-        pkt[PWOSPFPacket].packet_length = 0
-        pkt[PWOSPFPacket].router_id = self.controller.router_id
-        pkt[PWOSPFPacket].area_id = self.controller.area_id
-        pkt[PWOSPFPacket].checksum = 0
-
-    def hello_encap(self, pkt):
-        pkt[HelloPacket].network_mask = self.interface.mask
-        pkt[HelloPacket].hello_int = self.interface.helloint
-
-    def _create_hello_packet(self):
-        packet = Ether() / CPUMetadata() / IP() / PWOSPFPacket() / HelloPacket()
-        self.ether_encap(packet)
-        self.cpu_encap(packet)
-        self.ip_encap(packet)
-        self.PWOSPF_encap(packet)
-        self.hello_encap(packet)
-        return packet
-
-    def run(self):
-        pass
-        # if self.interface.port == 1:
-        #     return
-        # packet = self._create_hello_packet()
-        # # packet.show()
-        # self.controller.send(packet)
-        # time.sleep(self.interface.helloint)
-
 class Controller(Thread):
     '''
     A controller that listens for packets from the switch
@@ -159,19 +76,12 @@ class Controller(Thread):
         # ----------- INTERFACES ------------
         self.interfaces = []
 
-        self.DEBUG = True
+        self.DEBUG = False
 
         for interface in interfaces:
-            self.interfaces.append(Interface(interface["ip"], interface["mask"], interface["helloint"], interface["port"]))
+            self.interfaces.append(Interface(interface["ip"], interface["mask"], interface["helloint"], interface["port"], self))
         
         self.adjacency_list = {}
-
-        # ----------- HELLO packets ------------
-        self.hello_packet_senders = [HelloPacketSender(self.interfaces[i], self) for i in range(len(self.interfaces))]
-
-        # # Start the hello packet senders
-        for sender in self.hello_packet_senders:
-            sender.start()
 
     # Debug statement that can take a string and argument
     def debug(self, *args):
@@ -179,7 +89,9 @@ class Controller(Thread):
             print(f"{self.router_id} - DEBUG: ", *args)
 
     def findInterface(self, ip):
+        self.debug("Finding interface for IP: ", ip)
         for interface in self.interfaces:
+            self.debug("Checking interface: ", interface.ip)
             if interface.ip == ip:
                 return interface
         return None 
@@ -230,7 +142,6 @@ class Controller(Thread):
 
     def handleArpRequest(self, pkt):
         self.debug("Handling ARP request for ", pkt[ARP].pdst)
-        pkt.show()
         # self.debug(self.router_id, "Handling ARP request for ", pkt[ARP].pdst)
         self.addMacAddr(pkt[ARP].hwsrc, pkt[CPUMetadata].srcPort)
         self.addIpAddr(pkt[ARP].psrc, pkt[ARP].hwsrc) 
@@ -239,7 +150,11 @@ class Controller(Thread):
         matched_interface = self.findInterface(pkt[ARP].pdst)
 
         if matched_interface is not None:
+            self.debug("Matched interface!")
             pkt = self._constructArpReply(pkt, matched_interface)
+        else:
+            self.debug("No matched interface")
+        
         self.send(pkt)
     
     def __str__(self):
@@ -260,26 +175,49 @@ class Controller(Thread):
     4) The Authentication type specified must match the authentication type
     of the receiving router.
     '''
-    def _helloPacketIsValid(self, pkt):
+    def _PWOSPFPacketisValid(self, pkt):
+        # pkt.show()
+
         # Check 1
-        if pkt[HelloPacket].version != 2:
+        if pkt[PWOSPFPacket].version != 2:
             return False
 
         # TODO: Check 2
 
         # Check 3
-        if pkt[HelloPacket].area_id != self.area_id:
+        if pkt[PWOSPFPacket].area_id != self.area_id:
             return False
         
         # Check 4
-        if pkt[HelloPacket].autype != 0:
+        if pkt[PWOSPFPacket].autype != 0:
             return False    
 
         return True
 
+    def _HelloPacketisValid(self, interface, pkt):
+        return pkt[HelloPacket].network_mask == interface.mask or pkt[HelloPacket].hello_int == interface.helloint
+
+    def findInterface(self, port):
+        for interface in self.interfaces:
+            if interface.port == port:
+                return interface
+        return None
+    
     def handleHelloPacket(self, pkt):
-        if not self._helloPacketIsValid(pkt):
+        
+        # Drop packets from the same router
+        if pkt[PWOSPFPacket].router_id == self.router_id:
             return
+
+        interface = self.findInterface(pkt[CPUMetadata].srcPort)
+
+        if interface == None or not self._HelloPacketisValid(interface, pkt):
+            return 
+
+        neighbor = neighborFactory(pkt[PWOSPFPacket].router_id, pkt[IP].src)
+        interface.handleNeighbor(neighbor)
+        self.debug(f"New neighbors for interface {(self.router_id, interface.ip)}: {json.dumps(neighbor, indent=4)}")
+        self.debug(f"Interface {interface.ip} now has neighbors ${interface.neighbors}")
 
     def handlePkt(self, pkt):
         # Ignore packets without CPU metadata
@@ -299,12 +237,14 @@ class Controller(Thread):
                 self.handleArpReply(pkt)
 
         if PWOSPFPacket in pkt:
-            self.debug("Received PWOSPF packet")
-            if not self._helloPacketIsValid(pkt):
+            if not self._PWOSPFPacketisValid(pkt):
                 return
 
             if HelloPacket in pkt:
-                self.debug("Received Hello packet")
+                if not self._HelloPacketisValid:
+                    return
+
+                self.debug("Received Hello packet from ", pkt[PWOSPFPacket].router_id)
                 self.handleHelloPacket(pkt)
 
     def send(self, *args, **override_kwargs):
@@ -322,7 +262,7 @@ class Controller(Thread):
         super(Controller, self).start(*args, **kwargs)
         time.sleep(self.start_wait)
         for interface in self.interfaces:
-            HelloPacketSender(interface, self).start()
+            interface.start()
 
     def join(self, *args, **kwargs):
         self.stop_event.set()
