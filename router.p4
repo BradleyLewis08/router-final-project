@@ -240,7 +240,6 @@ control MyIngress(inout headers hdr,
     bit<16> dstPortSet = 0;
 
     apply {
-        debug_table.apply();
         if (standard_metadata.ingress_port == CPU_PORT) {
             if(hdr.cpu_metadata.isValid() && hdr.cpu_metadata.dstPort != 0) {
                 standard_metadata.egress_spec = (bit<9>)hdr.cpu_metadata.dstPort;
@@ -248,32 +247,35 @@ control MyIngress(inout headers hdr,
             }
             cpu_meta_decap();
         }
-        if (hdr.arp.isValid() && standard_metadata.ingress_port != CPU_PORT) {
-            send_to_cpu();
-        } else if (hdr.ipv4.isValid() && dstPortSet != 1) { // Only if CPU did not set the egress port already
-            // Handle TTL expiration
-            if (hdr.ipv4.ttl == 0) {
-                drop(); 
-            } else {
-                hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
-            }
-            
-            // Set the next_hop_ip address by looking either locally or in the routing table.
-            // Sets the next_hop_ip_address and the egress port
-            if(!local_forwarding_table.apply().hit) {
-                routing_table.apply();
-            } 
-            if (standard_metadata.egress_spec != CPU_PORT) {
-                if (!arp_table.apply().hit) {
-                    send_to_cpu();
+
+        if(dstPortSet != 1) { // If routing information did not come from CPU
+            if (hdr.arp.isValid() && standard_metadata.ingress_port != CPU_PORT) {
+                send_to_cpu();
+            } else if (hdr.ipv4.isValid() && dstPortSet != 1) { // Only if CPU did not set the egress port already
+                // Handle TTL expiration
+                if (hdr.ipv4.ttl == 0) {
+                    drop(); 
+                } else {
+                    hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
                 }
-            }
-            // Based on next_hop_ip_address, if we are not sending to CPU, we need to do ARP lookup
-        } else if (hdr.ethernet.isValid()) {
-            fwd_l2.apply();
-        } else {
-            send_to_cpu(); // Forward all other packets to CPU for handling
-        } 
+                
+                // Set the next_hop_ip address by looking either locally or in the routing table.
+                // Sets the next_hop_ip_address and the egress port
+                if(!local_forwarding_table.apply().hit) {
+                    routing_table.apply();
+                } 
+                if (standard_metadata.egress_spec != CPU_PORT) {
+                    if (!arp_table.apply().hit) {
+                        send_to_cpu();
+                    }
+                }
+                // Based on next_hop_ip_address, if we are not sending to CPU, we need to do ARP lookup
+            } else if (hdr.ethernet.isValid()) {
+                fwd_l2.apply();
+            } else {
+                send_to_cpu(); // Forward all other packets to CPU for handling
+            } 
+        }
     }
 }
 

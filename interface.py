@@ -40,7 +40,7 @@ class Interface(Thread):
 
     def debug(self, *args):
         if(self.DEBUG):
-            print(f"{self.ip} - DEBUG: ", *args)
+            print(f"INTERFACE: {self.ip} - DEBUG: ", *args)
     
     def __str__(self):
         ret = f"Router {self.controller.router_id} Interface {self.ip}:\n"
@@ -49,30 +49,24 @@ class Interface(Thread):
             ret += f"Router ID: {neighbor['routerId']}, Interface IP: {neighbor['interfaceIp']}, Last Hello Time: {neighbor['lastHelloTime']}\n"
         
         return ret
-
-    def print_neighbors(self):
-        for neighbor in self.neighbors:
-            print(f"Router ID: {neighbor['routerId']}, Interface IP: {neighbor['interfaceIp']}, Last Hello Time: {neighbor['lastHelloTime']}")
         
-        print("\n\n")
-        
-    def _ether_encap(self, pkt):
+    def _hello_ether_encap(self, pkt):
         pkt[Ether].src = self.controller.mac_addr
         pkt[Ether].dst = BCAST_ETHER_ADDR
     
-    def _cpu_encap(self, pkt):
+    def _hello_cpu_encap(self, pkt):
         pkt[CPUMetadata].fromCpu = 1
         pkt[CPUMetadata].origEtherType = CPU_ORIG_ETHER_TYPE
         pkt[CPUMetadata].srcPort = 1
         pkt[CPUMetadata].dstPort = self.port
         pkt[CPUMetadata].isHelloPacket = 1
 
-    def _ip_encap(self, pkt):
+    def _hello_ip_encap(self, pkt):
         pkt[IP].src = self.ip
         pkt[IP].dst = BCAST_HELLO_IP_ADDR
         pkt[IP].proto = OSPF_PROTOCOL_NUMBER
 
-    def _PWOSPF_encap(self, pkt):
+    def _hello_PWOSPF_encap(self, pkt):
         pkt[PWOSPFPacket].version = 2
         pkt[PWOSPFPacket].type = OSPF_HELLO_TYPE
         pkt[PWOSPFPacket].packet_length = 0
@@ -86,19 +80,19 @@ class Interface(Thread):
 
     def _create_hello_packet(self):
         packet = Ether() / CPUMetadata() / IP() / PWOSPFPacket() / HelloPacket()
-        self._ether_encap(packet)
-        self._cpu_encap(packet)
-        self._ip_encap(packet)
-        self._PWOSPF_encap(packet)
+        self._hello_ether_encap(packet)
+        self._hello_cpu_encap(packet)
+        # self.debug("Creating hello packet with dstPort", packet[CPUMetadata].dstPort)
+        self._hello_ip_encap(packet)
+        self._hello_PWOSPF_encap(packet)
         self._hello_encap(packet)
         return packet
 
     def run(self):
-        while True:
-            if self.port == 1:
-                return
+        if self.port == 1:
+            return
 
-            self.debug("Sending hello packet")
+        while True:
             packet = self._create_hello_packet()
             self.controller.send(packet)
             time.sleep(self.helloint)

@@ -105,6 +105,40 @@ class DualSwitchTopo(Topo):
     def get_router_to_host_mapping(self):
         return get_router_to_host_mapping(self.router_names, self.host_names, self.host_ips, self.host_macs)
 
+
+class TripleSwitchTopo(Topo):
+    def __init__(self, **opts):
+        super(TripleSwitchTopo, self).__init__(**opts)
+
+        self.router_names = ["r1", "r2", "r3"]
+        self.switch_names = ["s1", "s2", "s3"]
+        self.host_names = ["h1", "h2", "h3"]
+
+        self.router_ips = [f"200.0.{i}.0" for i in range(1, 4)]
+        self.host_ips = [f"200.0.{i}.10" for i in range(1, 4)]
+        self.host_macs = [f"00:00:00:00:00:{i}0" for i in range(1, 4)]
+        self.router_macs = [f"00:00:00:00:00:0{i}" for i in range(1, 4)]
+
+        for idx, router_name in enumerate(self.router_names):
+            router = self.addHost(router_name, ip=self.router_ips[idx], mac=self.router_macs[idx])
+            switch = self.addSwitch(self.switch_names[idx])
+            host = self.addHost(self.host_names[idx], ip=self.host_ips[idx], mac=self.host_macs[idx])
+
+            # Link the router to the switch and then the router to the host
+            self.addLink(router, switch, port2=CPU_EGRESS_PORT)
+            self.addLink(host, switch, port2=HOST_SWITCH_INGRESS_PORT)
+        
+        # Link the switches to each other
+        self.addLink(self.switch_names[0], self.switch_names[1], port1=2, port2=2)
+        self.addLink(self.switch_names[1], self.switch_names[2], port1=3, port2=2)
+    
+    def get_router_interfaces(self):
+        return get_router_interfaces(self.router_names)
+
+    def get_router_to_host_mapping(self):
+        return get_router_to_host_mapping(self.router_names, self.host_names, self.host_ips, self.host_macs)
+
+
 class QuadSwitchTopo(Topo):
     def __init__(self, **opts):
         super(QuadSwitchTopo, self).__init__(**opts)
@@ -132,14 +166,11 @@ class QuadSwitchTopo(Topo):
         self.addLink(self.switch_names[0], self.switch_names[1], port1=2, port2=2)
         self.addLink(self.switch_names[1], self.switch_names[2], port1=3, port2=2)
         self.addLink(self.switch_names[2], self.switch_names[3], port1=3, port2=2)
+        self.addLink(self.switch_names[3], self.switch_names[0], port1=3, port2=3)
 
     def get_router_interfaces(self):
         return get_router_interfaces(self.router_names)
     
     def get_router_to_host_mapping(self):
         return get_router_to_host_mapping(self.router_names, self.host_names, self.host_ips, self.host_macs)
-
-
-
-
 

@@ -1,4 +1,4 @@
-from scapy.fields import IntField, ByteField, ShortField, LongField, IPField, PacketListField
+from scapy.fields import IntField, ByteField, ShortField, LongField, IPField, PacketListField, FieldLenField
 from scapy.packet import Packet, bind_layers
 from scapy.layers.inet import IP
 
@@ -158,6 +158,10 @@ class LSUAdvertisement(Packet):
 		IPField('routerID', None)
 	]
 
+	# From https://stackoverflow.com/questions/33756348/scapy-using-a-packetlistfield-to-dissect-multiple-packets-contained-in-a-packet
+	def extract_padding(self, s):
+		return '', s
+
 '''
 LSU Packet Structure
 ----------------
@@ -208,10 +212,10 @@ Sequence
 class LSUPacket(Packet):
 	name="LSUPacket"
 	fields_desc = [
-		IPField("sequence", None),
-		IPField("ttl", None),
-		IPField("num_advertisements", None),
-		PacketListField("link_state_ads", None, LSUAdvertisement, length_from=lambda pkt:pkt.num_advertisements)
+		ShortField("sequence", None),
+		ShortField("ttl", None),
+		FieldLenField("num_advertisements", None, fmt="I", count_of="link_state_ads"),
+		PacketListField("link_state_ads", None, LSUAdvertisement, count_from=lambda pkt:pkt.num_advertisements)
 	]
 
 
