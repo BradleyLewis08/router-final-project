@@ -96,20 +96,8 @@ def init_triple_simulation():
 	init_control_plane_interfaces(switches, interfaces, routers)
 	init_host_local_routes(switches, routers, routers_to_hosts)
 	controllers = start_controllers(switches, routers, interfaces, routers_to_hosts)
-	print("Started")
 
-	print("Waiting for things to settle...")
-
-	ctr = 10
-	while ctr > 0:
-		time.sleep(1)
-		ctr -= 1
-		print(ctr)
-	
-	for controller in controllers:
-		controller.print_topology_database()
-	
-
+	return controllers
 
 
 

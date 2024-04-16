@@ -1,11 +1,16 @@
+
+from heapq import heappop, heappush
+from collections import defaultdict
 from threading import Thread, Event
 from scapy.all import sendp
 from scapy.all import Packet, Ether, IP, ARP, ICMP
 from async_sniff import sniff
 from cpu_metadata import CPUMetadata
 from packets import PWOSPFPacket, HelloPacket, LSUPacket, LSUAdvertisement
+
 import time
 import json
+
 
 from constants import *
 from interface import Interface, neighborFactory
@@ -93,6 +98,14 @@ class Controller(Thread):
         if(self.DEBUG):
             print(f"{self.router_id} - DEBUG: ", *args)
 
+
+    def find_port_to_router(self, router_id):
+        for interface in self.interfaces:
+            for neighbor in interface.neighbors:
+                if neighbor["routerId"] == router_id:
+                    return interface.port
+        return None
+
     def findInterfaceByIp(self, ip):
         for interface in self.interfaces:
             if interface.ip == ip:
@@ -108,12 +121,10 @@ class Controller(Thread):
                 action_name='MyIngress.set_egr',
                 action_params={'port': port})
         self.port_for_mac[mac] = port
-        self.debug(f"Added MAC-Port mapping: {mac} -> {port}")
     
     def addIpAddr(self, ip, mac):
         # Don't re-add the ip-mac mapping if we already have it:
         if ip in self.mac_for_ip: return
-        self.debug("Adding IP-MAC mapping: ", ip, mac)
         self.sw.insertTableEntry(table_name='MyIngress.arp_table',
                 match_fields={'next_hop_ip_address': ip},
                 action_name='MyIngress.arp_hit',
@@ -121,7 +132,6 @@ class Controller(Thread):
         self.mac_for_ip[ip] = mac
 
     def handleArpReply(self, pkt):
-        self.debug(self.router_id, "Handling ARP reply for ", pkt[ARP].pdst)
         self.addMacAddr(pkt[ARP].hwsrc, pkt[CPUMetadata].srcPort)
         self.addIpAddr(pkt[ARP].psrc, pkt[ARP].hwsrc)
         self.send(pkt)
@@ -144,9 +154,6 @@ class Controller(Thread):
         return pkt
 
     def handleArpRequest(self, pkt):
-        self.debug("Handling ARP request for ", pkt[ARP].pdst)
-
-        # self.debug(self.router_id, "Handling ARP request for ", pkt[ARP].pdst)
         self.addMacAddr(pkt[ARP].hwsrc, pkt[CPUMetadata].srcPort)
         self.addIpAddr(pkt[ARP].psrc, pkt[ARP].hwsrc) 
 
@@ -154,10 +161,8 @@ class Controller(Thread):
         matched_interface = self.findInterfaceByIp(pkt[ARP].pdst)
 
         if matched_interface is not None:
-            self.debug("Matched interface!")
             pkt = self._constructArpReply(pkt, matched_interface)
-        else:
-            self.debug("No matched interface")
+        self.send(pkt)
     
     def constructLSUAdsForInterface(self, interface, lsuAds):
         for neighbor in interface.neighbors:
@@ -212,7 +217,6 @@ class Controller(Thread):
                 self.constructLSUAdsForInterface(interface, lsuAds)
             lsuPacket = self.constructLSUPacket(lsuAds)
             self.floodLSU(lsuPacket)
-            time.sleep(self.lsuint)
 
     def floodLSU(self, lsuPacket):
         if lsuPacket.ttl <= 1:
@@ -227,7 +231,6 @@ class Controller(Thread):
                 lsuPacket[CPUMetadata].dstPort = interface.port
                 lsuPacket[LSUPacket].sequence = self.current_lsu_sequence
                 self._lsu_ip_encap(lsuPacket, neighbor["interfaceIp"])
-                self.debug(f"Flooding LSU to {neighbor['interfaceIp']} on interface {interface.ip}")
                 self.send(lsuPacket)
 
         self.current_lsu_sequence += 1
@@ -294,10 +297,8 @@ class Controller(Thread):
     def handleHelloPacket(self, pkt):
         # Drop packets from the same router
         if pkt[PWOSPFPacket].router_id == self.router_id:
-            self.debug("Dropping packet from same router")
             return
 
-        # self.debug("Handling Hello Packet with router ID: ", pkt[PWOSPFPacket].router_id, " and IP: ", pkt[IP].src, " and source port: ", pkt[CPUMetadata].srcPort)
         interface = self.findInterfaceByPort(pkt[CPUMetadata].srcPort)
 
         if interface == None or not self._HelloPacketisValid(interface, pkt):
@@ -305,8 +306,6 @@ class Controller(Thread):
 
         neighbor = neighborFactory(pkt[PWOSPFPacket].router_id, pkt[IP].src)
         interface.handleNeighbor(neighbor)
-        # self.debug(f"New neighbors for interface {(self.router_id, interface.ip)}: {json.dumps(neighbor, indent=4)}")
-        # self.debug(f"Interface {interface.ip} now has neighbors ${interface.neighbors}")
 
     def _LSUPacketisValid(self, pkt):
         routerId = pkt[PWOSPFPacket].router_id
@@ -324,34 +323,113 @@ class Controller(Thread):
         
         return True
 
+    def shouldAddEntry(self, entry, query):
+        should_add = True
+        for item in self.topology_database[query]:
+            if item["routerId"] == entry["routerId"]:
+                should_add = False
+                break
+        return should_add and entry not in self.topology_database[query]
+
     def updateTopologyDatabase(self, pkt):
-        neighboringRouterId = pkt[PWOSPFPacket].router_id
+        source = pkt[PWOSPFPacket].router_id
 
-        if neighboringRouterId not in self.topology_database:
-            self.topology_database[neighboringRouterId] = []
-
-        database_entry = {}
+        if source not in self.topology_database:
+            self.topology_database[source] = []
+        
         for ad in pkt[LSUPacket].link_state_ads:
-            database_entry = {
+            destination = ad.routerID
+            if destination not in self.topology_database:
+                self.topology_database[destination] = []
+
+            destination_database_entry = {
                 "subnet": ad.subnet,
                 "routerId": ad.routerID,
                 "mask": ad.mask
             }
 
-            # Check if the database entry already exists
-            if database_entry in self.topology_database[neighboringRouterId]:
-                continue
+            source_database_entry = {
+                "subnet": ad.subnet,
+                "routerId": source,
+                "mask": ad.mask
+            }
 
-            self.topology_database[neighboringRouterId].append(database_entry)
+            # Check if the database entry already exists
+            if self.shouldAddEntry(destination_database_entry, source):
+                self.topology_database[source].append(destination_database_entry)
+            
+            if self.shouldAddEntry(source_database_entry, destination):
+                self.topology_database[destination].append(source_database_entry)
+
+    def build_graph(self):
+        graph = defaultdict(dict)
+        for router, connections in self.topology_database.items():
+            for connection in connections:
+                neighbor = connection["routerId"]
+                graph[router][neighbor] = 1  # Assuming uniform cost of links
+        return graph
+
+    def dijkstra(graph, start):
+        distances = {vertex: float('infinity') for vertex in graph}
+        previous_nodes = {vertex: None for vertex in graph}
+        distances[start] = 0
+        pq = [(0, start)]  
+
+        while pq:
+            current_distance, current_vertex = heappop(pq)
+            for neighbor in graph[current_vertex]:
+                distance = current_distance + graph[current_vertex][neighbor]
+                if distance < distances[neighbor]:
+                    distances[neighbor] = distance
+                    previous_nodes[neighbor] = current_vertex
+                    heappush(pq, (distance, neighbor))
+        return distances, previous_nodes
+
+    def build_routing_table_for_router(self, graph, start):
+        distances, previous_nodes = dijkstra(graph, start)
+        routing_table = {}
+        for destination, path_cost in distances.items():
+            if destination == start:
+                continue
+            
+            next_hop = destination
+            while previous_nodes[next_hop] != start:
+                next_hop = previous_nodes[next_hop]
+            
+            for connection in self.topology_database[start]:
+                if connection["routerId"] == destination:
+                    subnet = connection["subnet"]
+                    mask = connection["mask"]
+                    routing_table[destination] = {
+                        'next_hop': next_hop,
+                        'cost': path_cost,
+                        'subnet': subnet,
+                        'mask': mask
+                    }
+                    break
+
+        return routing_table
+ 
+    def recomputeRoutes(self):
+        graph = self.build_graph()
+        routing_table = self.build_routing_table_for_router(graph, self.router_id)
+        for neighbor, routing_info in routing_table.items():
+            port = self.find_port_to_router(neighbor)
+            if port is None:
+                continue
+            self.sw.insertTableEntry(table_name='MyIngress.ipv4_lpm',
+                match_fields={'hdr.ipv4.dstAddr': [routing_info['subnet'], routing_info['mask']]},
+                action_name='MyIngress.ipv4_forward',
+                action_params={'dstAddr': routing_info['next_hop'], 'port': port})
+
 
     def handleLSUPacket(self, pkt):
         if not self._LSUPacketisValid(pkt): # Drop invalid packets
-            self.debug("Dropping invalid LSU packet from ", pkt[PWOSPFPacket].router_id)
             return
         
         # Check if the packet has been seen before
-        self.debug(f"Received LSU packet from {pkt[PWOSPFPacket].router_id}")
         self.updateTopologyDatabase(pkt)
+        # self.recomputeRoutes()
         self.floodLSU(pkt)
         return
 
@@ -380,11 +458,9 @@ class Controller(Thread):
                 return
 
             if HelloPacket in pkt:
-                # self.debug("Received Hello packet from ", pkt[PWOSPFPacket].router_id)
                 self.handleHelloPacket(pkt)
 
             if LSUPacket in pkt:
-                # self.debug("Received LSU packet")
                 self.handleLSUPacket(pkt)
 
     def send(self, *args, **override_kwargs):

@@ -93,16 +93,5 @@ def init_dual_simulation():
 	init_control_plane_interfaces(switches, interfaces, routers)
 	init_host_local_routes(switches, routers, routers_to_hosts)
 	controllers = start_controllers(switches, routers, interfaces)
-
-	# while True:
-	# 	for controller in controllers:
-	# 		for interface in controller.interfaces:
-	# 			print(interface)
-		
-	# 	print("-------------------\n")
-	# 	time.sleep(5)
-	
-	
-
-	# print(h1.cmd("ping -c1 200.0.2.1"))
+	return controllers
 

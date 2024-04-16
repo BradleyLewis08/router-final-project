@@ -9,6 +9,25 @@ ROUTER_HOST_EGRESS_PORT = 2
 HOST_SWITCH_INGRESS_PORT = 4
 HELLO_INTERVAL = 5
 
+s1_intfs = [('100.0.1.1','255.255.255.0',3,1),
+        ('100.0.1.2','255.255.255.0',3,2),
+        ('100.0.1.3','255.255.255.0',3,3),
+        ('100.0.1.4','255.255.255.0',3,4),
+        ('100.0.1.5','255.255.255.0',3,5)]
+s2_intfs = [('100.0.2.1','255.255.255.0',3,1),
+            ('100.0.2.2','255.255.255.0',3,2),
+            ('100.0.2.3','255.255.255.0',3,3),
+            ('100.0.2.4','255.255.255.0',3,4)]
+s3_intfs = [('100.0.3.1','255.255.255.0',3,1),
+            ('100.0.3.2','255.255.255.0',3,2),
+            ('100.0.3.3','255.255.255.0',3,3),
+            ('100.0.3.4','255.255.255.0',3,4),
+            ('100.0.3.5','255.255.255.0',3,5)]
+s4_intfs = [('100.0.4.1','255.255.255.0',3,1),
+            ('100.0.4.2','255.255.255.0',3,2),
+            ('100.0.4.3','255.255.255.0',3,3),
+            ('100.0.4.4','255.255.255.0',3,4)]
+
 def get_router_interfaces(router_names):
     router_interfaces = {}
 
@@ -174,3 +193,84 @@ class QuadSwitchTopo(Topo):
     def get_router_to_host_mapping(self):
         return get_router_to_host_mapping(self.router_names, self.host_names, self.host_ips, self.host_macs)
 
+
+class SquareSwitchesTopo(Topo):
+    def __init__(self, **opts):
+        Topo.__init__(self, **opts)
+        # Set up 4 routers
+        s1 = self.addSwitch('s1')
+        cpu1 = self.addHost('r1', ip='100.0.1.1')
+        self.addLink(cpu1, s1, port2=1)
+
+        s2 = self.addSwitch('s2')
+        cpu2 = self.addHost('r2', ip='100.0.2.1')
+        self.addLink(cpu2, s2, port2=1)
+
+        s3 = self.addSwitch('s3')
+        cpu3 = self.addHost('r3', ip='100.0.3.1')
+        self.addLink(cpu3, s3, port2=1)
+
+        s4 = self.addSwitch('s4')
+        cpu4 = self.addHost('r4', ip='100.0.4.1')
+        self.addLink(cpu4, s4, port2=1)
+
+        # Connect routers in square with 1-3 diagonal connection
+        self.addLink(s1, s2, port1=2, port2=2)
+        self.addLink(s2, s3, port1=3, port2=2)
+        self.addLink(s3, s4, port1=3, port2=2)
+        self.addLink(s4, s1, port1=3, port2=3)
+        self.addLink(s1, s3, port1=5, port2=5)
+
+        # Add host at each router
+        h1 = self.addHost('h1', ip='100.0.1.10')
+        self.addLink(h1, s1, port2=4)
+
+        h2 = self.addHost('h2', ip='100.0.2.10')
+        self.addLink(h2, s2, port2=4)
+
+        h3 = self.addHost('h3', ip='100.0.3.10')
+        self.addLink(h3, s3, port2=4)
+
+        h4 = self.addHost('h4', ip='100.0.4.10')
+        self.addLink(h4, s4, port2=4)
+    
+    def get_router_interfaces(self):
+        return {
+            'r1': [{
+                'ip': i[0],
+                'mask': i[1],
+                'helloint': HELLO_INTERVAL,
+                'port': i[3]
+            } for i in s1_intfs],
+            'r2': [{
+                'ip': i[0],
+                'mask': i[1],
+                'helloint': HELLO_INTERVAL,
+                'port': i[3]
+            } for i in s2_intfs],
+            'r3': [{
+                'ip': i[0],
+                'mask': i[1],
+                'helloint': HELLO_INTERVAL,
+                'port': i[3]
+            } for i in s3_intfs],
+            'r4': [{
+                'ip': i[0],
+                'mask': i[1],
+                'helloint': HELLO_INTERVAL,
+                'port': i[3]
+            } for i in s4_intfs]
+        }
+
+    def get_router_to_host_mapping(self):
+        router_to_hosts = {}
+        for i in range(1, 5):
+            router_to_hosts[f'r{i}'] = [{
+                'name': f'h{i}',
+                'ip': f'100.0.{i}.10',
+                'mac': f'00:00:00:00:00:{i}0',
+                'port': ROUTER_HOST_EGRESS_PORT
+            }]
+        return router_to_hosts
+
+    
