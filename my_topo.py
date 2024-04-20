@@ -9,25 +9,6 @@ ROUTER_HOST_EGRESS_PORT = 2
 HOST_SWITCH_INGRESS_PORT = 4
 HELLO_INTERVAL = 5
 
-s1_intfs = [('100.0.1.1','255.255.255.0',3,1),
-        ('100.0.1.2','255.255.255.0',3,2),
-        ('100.0.1.3','255.255.255.0',3,3),
-        ('100.0.1.4','255.255.255.0',3,4),
-        ('100.0.1.5','255.255.255.0',3,5)]
-s2_intfs = [('100.0.2.1','255.255.255.0',3,1),
-            ('100.0.2.2','255.255.255.0',3,2),
-            ('100.0.2.3','255.255.255.0',3,3),
-            ('100.0.2.4','255.255.255.0',3,4)]
-s3_intfs = [('100.0.3.1','255.255.255.0',3,1),
-            ('100.0.3.2','255.255.255.0',3,2),
-            ('100.0.3.3','255.255.255.0',3,3),
-            ('100.0.3.4','255.255.255.0',3,4),
-            ('100.0.3.5','255.255.255.0',3,5)]
-s4_intfs = [('100.0.4.1','255.255.255.0',3,1),
-            ('100.0.4.2','255.255.255.0',3,2),
-            ('100.0.4.3','255.255.255.0',3,3),
-            ('100.0.4.4','255.255.255.0',3,4)]
-
 def get_router_interfaces(router_names):
     router_interfaces = {}
 
@@ -39,7 +20,7 @@ def get_router_interfaces(router_names):
                 "mask": MASK,
                 "helloint": HELLO_INTERVAL,
                 "port": interface_idx,
-            } for interface_idx in range(1, 4)
+            } for interface_idx in range(1, 5)
         ]
         router_interfaces[router_name] = interfaces
 
@@ -59,7 +40,8 @@ def get_router_to_host_mapping(router_names, host_names, host_ips, host_macs):
             "ip": host_ip,
             "mac": host_mac,
             "port": ROUTER_HOST_EGRESS_PORT
-        }]
+        }
+    ]
 
     return router_to_hosts
 
@@ -143,6 +125,7 @@ class TripleSwitchTopo(Topo):
             switch = self.addSwitch(self.switch_names[idx])
             host = self.addHost(self.host_names[idx], ip=self.host_ips[idx], mac=self.host_macs[idx])
 
+
             # Link the router to the switch and then the router to the host
             self.addLink(router, switch, port2=CPU_EGRESS_PORT)
             self.addLink(host, switch, port2=HOST_SWITCH_INGRESS_PORT)
@@ -150,6 +133,8 @@ class TripleSwitchTopo(Topo):
         # Link the switches to each other
         self.addLink(self.switch_names[0], self.switch_names[1], port1=2, port2=2)
         self.addLink(self.switch_names[1], self.switch_names[2], port1=3, port2=2)
+    
+
     
     def get_router_interfaces(self):
         return get_router_interfaces(self.router_names)
@@ -192,7 +177,6 @@ class QuadSwitchTopo(Topo):
     
     def get_router_to_host_mapping(self):
         return get_router_to_host_mapping(self.router_names, self.host_names, self.host_ips, self.host_macs)
-
 
 class SquareSwitchesTopo(Topo):
     def __init__(self, **opts):

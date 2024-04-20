@@ -1,5 +1,6 @@
 import sys
 import time
+import json
 sys.path.append("/home/bradleylewis/p4app/docker/scripts")
 sys.path.append("/home/bradleylewis/p4-build/p4dev-python-venv/lib/python3.10/site-packages")
 from tests import test_ping_all_router_interfaces
@@ -60,6 +61,16 @@ def start_controllers(switches, routers, interfaces, routers_to_hosts):
 	
 	return controllers
 
+def setup_default_gateways(switches, routers, routers_to_hosts, net):
+	for switch_idx, switch in enumerate(switches):
+		router = routers[switch_idx]
+		if router.name in routers_to_hosts:
+			for host in routers_to_hosts[router.name]:
+				h = net.get(host["name"])
+				print(f"ip route add default gw 200.0.{switch_idx+ + 1}.1")
+				h.cmd(f"ip route add default gw 200.0.{switch_idx+ + 1}.1")
+
+
 
 # ----------------- UTILS -----------------
 def print_all_table_entries(switches):
@@ -90,14 +101,17 @@ def init_triple_simulation():
 	hosts = [h1, h2, h3]
 
 	interfaces = topo.get_router_interfaces()
+	print(json.dumps(interfaces, indent=4))
 	routers_to_hosts = topo.get_router_to_host_mapping()
 
 	init_multicast(switches)
 	init_control_plane_interfaces(switches, interfaces, routers)
 	init_host_local_routes(switches, routers, routers_to_hosts)
+	setup_default_gateways(switches, routers, routers_to_hosts, net)
+	# 
 	controllers = start_controllers(switches, routers, interfaces, routers_to_hosts)
 
-	return controllers
+	return controllers, switches, hosts
 
 
 

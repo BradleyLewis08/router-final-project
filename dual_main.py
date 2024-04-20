@@ -23,7 +23,7 @@ def init_multicast(switches):
 			action_name="MyIngress.set_mgid",
 			action_params={"mgid": bcast_mgid},
 		)
-
+				 
 '''
 Function to add table entries to forward packets to the CPU
 '''
@@ -93,5 +93,5 @@ def init_dual_simulation():
 	init_control_plane_interfaces(switches, interfaces, routers)
 	init_host_local_routes(switches, routers, routers_to_hosts)
 	controllers = start_controllers(switches, routers, interfaces)
-	return controllers
+	return controllers, switches, hosts
 

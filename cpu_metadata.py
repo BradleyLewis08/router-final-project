@@ -1,4 +1,4 @@
-from scapy.fields import BitField, ByteField, ShortField
+from scapy.fields import BitField, ByteField, ShortField, IPField, IPField
 from scapy.packet import Packet, bind_layers
 from scapy.layers.inet import IP
 from scapy.layers.l2 import Ether, ARP

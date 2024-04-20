@@ -224,6 +224,7 @@ control MyIngress(inout headers hdr,
             hdr.arp.dstIP: exact;
             hdr.ipv4.srcAddr: exact;
             hdr.ipv4.dstAddr: exact;
+            hdr.ipv4.protocol: exact;
             standard_metadata.ingress_port: exact;
             standard_metadata.egress_spec: exact;
             next_hop_ip_address: exact;
@@ -248,6 +249,8 @@ control MyIngress(inout headers hdr,
             cpu_meta_decap();
         }
 
+        debug_table.apply();
+
         if(dstPortSet != 1) { // If routing information did not come from CPU
             if (hdr.arp.isValid() && standard_metadata.ingress_port != CPU_PORT) {
                 send_to_cpu();
@@ -264,6 +267,7 @@ control MyIngress(inout headers hdr,
                 if(!local_forwarding_table.apply().hit) {
                     routing_table.apply();
                 } 
+
                 if (standard_metadata.egress_spec != CPU_PORT) {
                     if (!arp_table.apply().hit) {
                         send_to_cpu();
@@ -286,7 +290,24 @@ control MyEgress(inout headers hdr,
 }
 
 control MyComputeChecksum(inout headers  hdr, inout metadata meta) {
-    apply { }
+    apply {
+        update_checksum(
+            hdr.ipv4.isValid(),
+            { hdr.ipv4.version,
+                hdr.ipv4.ihl,
+                hdr.ipv4.diffserv,
+                hdr.ipv4.totalLen,
+                hdr.ipv4.identification,
+                hdr.ipv4.flags,
+                hdr.ipv4.fragOffset,
+                hdr.ipv4.ttl,
+                hdr.ipv4.protocol,
+                hdr.ipv4.srcAddr,
+                hdr.ipv4.dstAddr },
+            hdr.ipv4.hdrChecksum,
+            HashAlgorithm.csum16
+        );
+    }
 }
 
 control MyDeparser(packet_out packet, in headers hdr) {

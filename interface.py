@@ -31,6 +31,12 @@ class Interface(Thread):
                 return idx
         return -1
 
+    def getInterfaceIpFromRouterId(self, routerId):
+        for neighbor in self.neighbors:
+            if neighbor["routerId"] == routerId:
+                return neighbor["interfaceIp"]
+        return None
+
     def handleNeighbor(self, neighbor):
         neighbor_idx = self.hasNeighbor(neighbor["routerId"], neighbor["interfaceIp"])
         if neighbor_idx == -1:

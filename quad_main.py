@@ -99,6 +99,8 @@ def init_quad_simulation():
 	init_control_plane_interfaces(switches, interfaces, routers)
 	init_host_local_routes(switches, routers, routers_to_hosts)
 	controllers = start_controllers(switches, routers, interfaces)
+
+	return controllers, switches, hosts
 	print("Started")
 
 	time.sleep(10)
