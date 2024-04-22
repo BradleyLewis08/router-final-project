@@ -62,5 +62,5 @@ class LSU(Thread):
 			for interface in self.router.interfaces:
 				self.constructLSUAdsForInterface(interface, lsuAds)
 			lsuPacket = self.constructLSUPacket(lsuAds)
-			self.router.floodLSU(lsuPacket, False)
+			self.router.floodLSU(lsuPacket)
 

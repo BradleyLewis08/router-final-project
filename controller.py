@@ -15,6 +15,49 @@ import json
 from constants import *
 from interface import Interface, neighborFactory
 
+class InterfaceHelloMonitor(Thread):
+    def __init__(self, controller):
+        super(InterfaceHelloMonitor, self).__init__()
+        self.controller = controller
+        self.stop_event = Event()
+    
+    def run(self):
+        while not self.stop_event.is_set():
+            changed_interfaces = []
+            for interface in self.controller.interfaces:
+                for neighbor in interface.neighbors:
+                    if time.time() - neighbor["lastHelloTime"] > interface.helloint * 3:
+                        interface.neighbors.remove(neighbor)
+                        changed_interfaces.append(interface)
+            
+            if len(changed_interfaces) > 0:
+                for interface in changed_interfaces:
+                    lsuAds = []
+                    interface.constructLSUAdsForInterface(interface, lsuAds)
+                    lsuPacket = interface.constructLSUPacket(lsuAds)
+                    self.controller.floodLSU(lsuPacket)
+            time.sleep(1)
+
+class ARPTimeouts(Thread):
+    def __init__(self, controller, arp_timeout=120):
+        super(ARPTimeouts, self).__init__()
+        self.controller = controller
+        self.arp_timeout = arp_timeout
+        self.stop_event = Event()
+    
+    def run(self):
+        while not self.stop_event.is_set():
+            for (addr, mac), timestamp in self.controller.arp_entry_log.items():
+                if time.time() - timestamp > self.arp_timeout:
+                    del self.controller.arp_entry_log[addr]
+                    del self.controller.mac_for_ip[addr]
+                    del self.controller.port_for_mac[mac]
+                    self.controller.sw.removeTableEntry(
+                        table_name='MyIngress.arp_table',
+                        match_fields={'next_hop_ip_address': addr},
+                    )
+            time.sleep(1)
+                    
 class Controller(Thread):
     '''
     A controller that listens for packets from the switch
@@ -62,11 +105,14 @@ class Controller(Thread):
         self.router_id = router.IP()
         self.lsuint = lsuint
         self.last_arp = None
+        self.arp_entry_log = {}
+
+        self.adjacent_routes = set()
 
         # ----------- INTERFACES ------------
         self.interfaces = []
 
-        self.DEBUG = False
+        self.DEBUG = True
 
         self.previous_lsu_packets = {}
 
@@ -74,14 +120,23 @@ class Controller(Thread):
             self.interfaces.append(Interface(interface["ip"], interface["mask"], interface["helloint"], interface["port"], self))
         
         self.topology_database = {}
-        self.hosts = hosts
 
         self.current_lsu_sequence = 0
-        # Start the startLSUTick thread
         self.lsu_ticker = LSU(self)
+        self.interface_hello_monitor = InterfaceHelloMonitor(self)
+        self.arp_timeouts = ARPTimeouts(self)
 
-        self.interface_map = {}
-        self.awaiting_reply = set()
+    def print_counters(self):
+        print("Counters for router", self.router_id)
+        print("--------------------")
+        print("IP packets:")
+        print(self.sw.readCounter("IP_packets", 0)[0])
+        print("ARP packets:")
+        print(self.sw.readCounter("ARP_packets", 0)[0])
+        print("CPU_packets")
+        print(self.sw.readCounter("CPU_packets", 0)[0])
+
+
 
     def generateSubnet(self, router_id, mask):
         subnet = router_id.split(".")
@@ -89,15 +144,6 @@ class Controller(Thread):
         subnet = [int(subnet[i]) & int(mask[i]) for i in range(4)]
         return ".".join([str(i) for i in subnet])
 
-    def show_packet(self, pkt):
-        if self.sw.name == "s5":
-            pkt.show()
-
-    def print_topology_database(self):
-        print(f"Topology Database for router {self.router_id}:")
-        print(json.dumps(self.topology_database, indent=4))
-
-    # Debug statement that can take a string and argument
     def debug(self, *args):
         if(self.DEBUG):
             print(f"{self.router_id} - DEBUG: ", *args)
@@ -112,7 +158,6 @@ class Controller(Thread):
     def findInterfaceByIp(self, ip):
         for interface in self.interfaces:
             if interface.ip == ip:
-                self.debug("Matched interface: ", interface.ip, interface.port)
                 return interface
         return None 
 
@@ -138,7 +183,7 @@ class Controller(Thread):
     def handleArpReply(self, pkt):
         self.addMacAddr(pkt[ARP].hwsrc, pkt[CPUMetadata].srcPort)
         self.addIpAddr(pkt[ARP].psrc, pkt[ARP].hwsrc)
-        self.debug("Handling ARP reply from ", pkt[ARP].psrc, " to ", pkt[ARP].pdst)
+        self.arp_entry_log[(pkt[ARP].psrc, pkt[ARP].hwsrc)] = time.time()
         self.send(pkt)
     
     def _setArpHeaders(self, pkt, matched_interface):
@@ -171,8 +216,8 @@ class Controller(Thread):
         # Ignore ARP requests from the same router
         self.addMacAddr(pkt[ARP].hwsrc, pkt[CPUMetadata].srcPort)
         self.addIpAddr(pkt[ARP].psrc, pkt[ARP].hwsrc) 
+        self.arp_entry_log[(pkt[ARP].psrc, pkt[ARP].hwsrc)] = time.time()
 
-        self.debug("Handling ARP request for ", pkt[ARP].pdst, " from ", pkt[ARP].psrc)
         # If the destination IP is one of the router's interfaces, send an ARP reply
         matched_interface = self.findInterfaceByIp(pkt[ARP].pdst)
         if matched_interface is not None:
@@ -183,7 +228,6 @@ class Controller(Thread):
                 return
             self.last_arp = pkt[ARP].pdst
             self.send(pkt)
-
     
     def constructLSUAdsForInterface(self, interface, lsuAds):
         for neighbor in interface.neighbors:
@@ -232,10 +276,6 @@ class Controller(Thread):
 
     def handleICMPRequest(self, pkt):
         macAddress = self.mac_for_ip.get(pkt[IP].src)   
-        if macAddress is None:
-            print("MAC address not found")
-            return
-        self.debug("Handling ICMP request from ", pkt[IP].src, " to ", pkt[IP].dst)
         respPkt = Ether()/CPUMetadata()/IP()/ICMP()
         respPkt[Ether].src = self.mac_addr
         respPkt[Ether].dst = macAddress
@@ -252,26 +292,36 @@ class Controller(Thread):
         respPkt[ICMP].seq = pkt[ICMP].seq
         respPkt[ICMP].payload = pkt[ICMP].payload
         self.send(respPkt)
+    
+    def handleICMPUnreachable(self, pkt):
+        respPkt = Ether() / CPUMetadata() / IP() / ICMP()
+        respPkt[Ether].dst = pkt[Ether].src
+        respPkt[Ether].src = self.mac_addr
+        respPkt[CPUMetadata].fromCpu = 1
+        respPkt[CPUMetadata].origEtherType = CPU_ORIG_ETHER_TYPE
+        respPkt[CPUMetadata].srcPort = 1
+        respPkt[CPUMetadata].dstPort = 0
+        respPkt[IP].src = pkt[IP].dst
+        respPkt[IP].dst = pkt[IP].src
+        respPkt[IP].proto = ICMP_PROTOCOL_NUMBER
+        respPkt[ICMP].type = ICMP_UNREACHABLE_TYPE
+        respPkt[ICMP].code = ICMP_UNREACHABLE_CODE
+        self.send(respPkt)
 
-    def floodLSU(self, lsuPacket, isInResponse):
+
+    def floodLSU(self, lsuPacket):
         if lsuPacket.ttl <= 1:
             return
 
         lsuPacket.ttl -= 1
-        self.debug("Flooding to interfaces", self.interfaces)
         for interface in self.interfaces:
             for neighbor in interface.neighbors:
                 # Don't flood to the interface that the packet came from
                 if neighbor["interfaceIp"] == lsuPacket[IP].src:
-                    self.debug("Not flooding to neighbor: ", neighbor["interfaceIp"])
                     continue
                 lsuPacket[CPUMetadata].dstPort = interface.port
                 lsuPacket[LSUPacket].sequence = self.current_lsu_sequence
                 self._lsu_ip_encap(lsuPacket, neighbor["interfaceIp"], interface.ip)
-                if(isInResponse):
-                    self.debug("Flooding LSU packet as a response")
-                else:
-                    self.debug("Flooding LSU packet originating from here")
                 self.send(lsuPacket)
 
         self.current_lsu_sequence += 1
@@ -295,17 +345,12 @@ class Controller(Thread):
     of the receiving router.
     '''
     def _PWOSPFPacketisValid(self, pkt):
-        # Check 1
         if pkt[PWOSPFPacket].version != 2:
             return False
 
-        # TODO: Check 2
-
-        # Check 3
         if pkt[PWOSPFPacket].area_id != self.area_id:
             return False
         
-        # Check 4
         if pkt[PWOSPFPacket].autype != 0:
             return False    
 
@@ -328,17 +373,10 @@ class Controller(Thread):
         return None
 
     def findIpForInterfaceFromRouterId(self, routerId):
-        self.debug("Finding IP for router ID: ", routerId)
-        self.debug("Checking interfaces: ", self.interfaces)
         for interface in self.interfaces:
-            self.debug("Checking interface: ", interface.ip)
-            self.debug(interface.neighbors)
             for neighbor in interface.neighbors:
-                self.debug("Checking neighbor: ", neighbor["routerId"])
                 if neighbor["routerId"] == routerId:
-                    self.debug("Found IP: ", neighbor["interfaceIp"])
                     return neighbor["interfaceIp"]
-            self.debug("No IP found for router ID: ", routerId)
         return None
 
     
@@ -427,10 +465,8 @@ class Controller(Thread):
 
     def recomputeRoutes(self):
         previous_nodes = self.dijkstra(self.router_id)
-        self.debug("Previous nodes: ", previous_nodes)
         for destination, prev_node in previous_nodes.items():
             if destination == self.router_id or prev_node is None:
-                self.debug(f"Skipping destination {destination}")
                 continue  # Skip the router itself and unreachable nodes
             
             # Get the next_hop for the destination
@@ -446,6 +482,12 @@ class Controller(Thread):
 
             entry = self.generateSubnet(destination, next_hop_interface.mask)
 
+            if destination in self.adjacent_routes:
+                self.sw.removeTableEntry(
+                    table_name='MyIngress.routing_table',
+                    match_fields={'hdr.ipv4.dstAddr': [entry, 24]}
+                )
+
             # Insert the routing table entry
             self.sw.insertTableEntry(
                 table_name='MyIngress.routing_table',
@@ -454,8 +496,8 @@ class Controller(Thread):
                 action_params={'next_hop': next_hop_ip, 'port': next_hop_interface.port}
             )
 
-            self.debug(f"Routing entry added for {entry}: next hop {current_node} via {next_hop_interface.ip} on port {next_hop_interface.port}")
-
+            # Add the destination to the adjacent routes
+            self.adjacent_routes.add(destination)
 
     def handleLSUPacket(self, pkt):
         routerId = pkt[PWOSPFPacket].router_id
@@ -481,7 +523,7 @@ class Controller(Thread):
             self.recomputeRoutes()
         
         self.previous_lsu_packets[routerId] = pkt
-        self.floodLSU(pkt, True)
+        self.floodLSU(pkt)
 
     def handlePkt(self, pkt):
         # Ignore packets without CPU metadata
@@ -492,9 +534,7 @@ class Controller(Thread):
         if pkt[CPUMetadata].fromCpu == 1: 
            return
         
-        self.show_packet(pkt)
         if ARP in pkt:
-            self.debug("ARP packet received")
             if pkt[ARP].op == ARP_OP_REQ:
                 # pkt.show()
                 self.handleArpRequest(pkt)
@@ -503,6 +543,17 @@ class Controller(Thread):
         
         if ICMP in pkt:
             self.handleICMPRequest(pkt)
+        
+        if IP in pkt:
+            # Check to see if the packet is for any of the interfaces it owns
+            unreachable = True
+            for interface in self.interfaces:
+                if pkt[IP].dst == interface.ip or pkt[IP].dst == BCAST_HELLO_IP_ADDR:
+                    unreachable = False
+                    break
+            
+            if unreachable:
+                self.handleICMPUnreachable(pkt)
 
         if PWOSPFPacket in pkt:
             if not self._PWOSPFPacketisValid(pkt):
@@ -532,6 +583,8 @@ class Controller(Thread):
             interface.start()
         
         self.lsu_ticker.start()
+        self.interface_hello_monitor.start()
+        self.arp_timeouts.start()
 
     def join(self, *args, **kwargs):
         self.stop_event.set()

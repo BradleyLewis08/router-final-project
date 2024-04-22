@@ -116,6 +116,10 @@ control MyIngress(inout headers hdr,
     macAddr_t next_hop_mac_address = 0;
     bit<16> cpu_bound = 0;
 
+    counter(1, CounterType.packets) IP_packets;
+    counter(1, CounterType.packets) ARP_packets;
+    counter(1, CounterType.packets) CPU_packets;
+
     action drop() {
         mark_to_drop(standard_metadata);
     }
@@ -135,6 +139,8 @@ control MyIngress(inout headers hdr,
         hdr.cpu_metadata.origEtherType = hdr.ethernet.etherType;
         hdr.cpu_metadata.srcPort = (bit<16>)standard_metadata.ingress_port;
         hdr.ethernet.etherType = TYPE_CPU_METADATA;
+
+
     }
 
     action cpu_meta_decap() {
@@ -145,6 +151,7 @@ control MyIngress(inout headers hdr,
     action send_to_cpu() {
         cpu_meta_encap();
         standard_metadata.egress_spec = CPU_PORT;
+        CPU_packets.count((bit<32>) 0);
     }
 
     // ------------------------ ARP Processing ------------------------
@@ -253,9 +260,11 @@ control MyIngress(inout headers hdr,
 
         if(dstPortSet != 1) { // If routing information did not come from CPU
             if (hdr.arp.isValid() && standard_metadata.ingress_port != CPU_PORT) {
+                ARP_packets.count((bit<32>) 0);
                 send_to_cpu();
             } else if (hdr.ipv4.isValid() && dstPortSet != 1) { // Only if CPU did not set the egress port already
                 // Handle TTL expiration
+                IP_packets.count((bit<32>) 0);
                 if (hdr.ipv4.ttl == 0) {
                     drop(); 
                 } else {

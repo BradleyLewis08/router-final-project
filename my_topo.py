@@ -132,8 +132,9 @@ class TripleSwitchTopo(Topo):
             self.addLink(host, switch, port2=HOST_SWITCH_INGRESS_PORT)
         
         # Link the switches to each other
-        self.addLink(self.switch_names[0], self.switch_names[1], port1=2, port2=2)
-        self.addLink(self.switch_names[1], self.switch_names[2], port1=3, port2=2)
+        self.addLink(self.switch_names[0], self.switch_names[1], port1=2, port2=3)
+        self.addLink(self.switch_names[1], self.switch_names[2], port1=2, port2=3)
+        self.addLink(self.switch_names[2], self.switch_names[0], port1=2, port2=3)
 
     def get_router_interfaces(self):
         return get_router_interfaces(self.router_names)

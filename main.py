@@ -4,24 +4,30 @@ from triple_main import init_triple_simulation
 from square_simulation import init_square_simulation
 import time
 
+# Triangle simulation
 controllers, switches, hosts = init_triple_simulation()
-# controllers, switches, hosts = init_quad_simulation()
-# controllers, switches, hosts = init_dual_simulation()
-# controllers = init_square_simulation()
 
 print("Waiting for things to settle...")
 
-ctr = 20
+ctr = 10
 while ctr > 0:
 	time.sleep(1)
 	ctr -= 1
 	print(ctr)
 
-def test_pings():
-	for idx, host in enumerate(hosts):
-		for idx2, host2 in enumerate(hosts):
-			if idx != idx2:
-				print(f"Pinging {host.name} to {host2.name}")
-				print(host.cmd(f"ping -c1 {host2.IP()}"))
+# Ping every router interface from host 0
+anchor = hosts[0]
+for controller in controllers[1:]:
+	for interface in controller.interfaces:
+		print(anchor.cmd(f"ping -c1 {interface.ip}"))
 
-test_pings()
+# Ping every host from host 1
+anchor = hosts[1]
+for host in hosts:
+	if host == anchor:
+		continue
+	print(anchor.cmd(f"ping -c1 {host.IP()}"))
+
+# Print counters
+for controller in controllers:
+	controller.print_counters()

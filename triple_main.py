@@ -61,16 +61,6 @@ def start_controllers(switches, routers, interfaces, routers_to_hosts):
 	
 	return controllers
 
-def setup_default_gateways(switches, routers, routers_to_hosts, net):
-	for switch_idx, switch in enumerate(switches):
-		router = routers[switch_idx]
-		if router.name in routers_to_hosts:
-			for host in routers_to_hosts[router.name]:
-				h = net.get(host["name"])
-				print(f"ip route add default gw 200.0.{switch_idx+ + 1}.1")
-				h.cmd(f"ip route add default gw 200.0.{switch_idx+ + 1}.1")
-
-
 
 # ----------------- UTILS -----------------
 def print_all_table_entries(switches):
