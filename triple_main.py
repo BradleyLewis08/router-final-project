@@ -101,30 +101,12 @@ def init_triple_simulation():
 	hosts = [h1, h2, h3]
 
 	interfaces = topo.get_router_interfaces()
-	print(json.dumps(interfaces, indent=4))
 	routers_to_hosts = topo.get_router_to_host_mapping()
 
 	init_multicast(switches)
 	init_control_plane_interfaces(switches, interfaces, routers)
 	init_host_local_routes(switches, routers, routers_to_hosts)
-	setup_default_gateways(switches, routers, routers_to_hosts, net)
 	# 
 	controllers = start_controllers(switches, routers, interfaces, routers_to_hosts)
 
 	return controllers, switches, hosts
-
-
-
-
-
-
-
-
-	# ctr = 15
-	# while ctr > 0:
-	# 	time.sleep(1)
-	# 	ctr -= 1
-	# 	print(ctr)
-
-
-

@@ -13,7 +13,7 @@ class LSU(Thread):
 	def constructLSUAdsForInterface(self, interface, lsuAds):
 		for neighbor in interface.neighbors:
 			lsuAd = LSUAdvertisement()
-			lsuAd.subnet = interface.ip
+			lsuAd.subnet = self.router.generateSubnet(neighbor["routerId"], interface.mask)
 			lsuAd.routerID = neighbor["routerId"]
 			lsuAd.mask = interface.mask
 			lsuAds.append(lsuAd)
@@ -56,12 +56,11 @@ class LSU(Thread):
 		return pkt
 	
 	def run(self):
-		time.sleep(10)
 		while True:
+			time.sleep(self.router.lsuint)
 			lsuAds = []
 			for interface in self.router.interfaces:
 				self.constructLSUAdsForInterface(interface, lsuAds)
 			lsuPacket = self.constructLSUPacket(lsuAds)
 			self.router.floodLSU(lsuPacket, False)
-			time.sleep(self.router.lsuint)
 
